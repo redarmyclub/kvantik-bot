@@ -1,0 +1,9 @@
+node_modules/
+.env
+bot_logs/
+bot_data/
+exports/
+backups/
+
+npm-debug.log*
+*.log

@@ -1,0 +1,39 @@
+{
+  "name": "kvantik-telegram-bot",
+  "version": "2.0.0",
+  "description": "Telegram bot для детского клуба Квантик с модульной архитектурой",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js",
+    "old": "node bot_fixed.js",
+    "backup": "node scripts/backup.js",
+    "export": "node scripts/export.js",
+    "monitor": "node scripts/monitor.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "crm",
+    "booking"
+  ],
+  "author": "Kvantik Team",
+  "license": "ISC",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "axios": "^1.6.0",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.3.1",
+    "exceljs": "^4.4.0",
+    "googleapis": "^128.0.0",
+    "joi": "^17.11.0",
+    "moment-timezone": "^0.5.43",
+    "chokidar": "^3.5.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
