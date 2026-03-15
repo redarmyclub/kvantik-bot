@@ -4,6 +4,7 @@
  */
 
 const logger = require('../utils/logger');
+const createNotificationRouter = require('../utils/notificationRouter');
 
 const registrationModule = {
   name: 'registration',
@@ -15,6 +16,7 @@ const registrationModule = {
     this.bot = context.bot;
     this.data = context.data;
     this.saveData = context.saveData;
+    this.notificationRouter = createNotificationRouter(this.bot, logger);
     
     // Инициализация состояний пользователей
     if (!this.data.userStates) {
@@ -322,9 +324,7 @@ const registrationModule = {
     }
     
     // Отправляем администраторам
-    const MAIN_ADMIN_ID = process.env.MAIN_ADMIN_ID || '805286122';
-    
-    this.bot.sendMessage(MAIN_ADMIN_ID, message).catch(() => {
+    this.notificationRouter.sendAdminMessage(message).catch(() => {
       console.log('Не удалось отправить уведомление админу');
     });
   }

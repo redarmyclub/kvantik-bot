@@ -11,6 +11,8 @@
 const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
+const logger = require('../utils/logger');
+const createNotificationRouter = require('../utils/notificationRouter');
 
 module.exports = {
   name: 'subscriptionInfo',
@@ -25,6 +27,7 @@ module.exports = {
     this.users = context.users;
     this.data = context.data;
     this.saveData = context.saveData;
+    this.notificationRouter = createNotificationRouter(this.bot, logger);
     
     // Инициализируем хранилище для отслеживания уведомлений
     if (!this.data.notifiedUsers) {
@@ -191,7 +194,7 @@ module.exports = {
     
     try {
       // Отправляем родителю
-      await this.bot.sendMessage(parent.chatId, message);
+      await this.notificationRouter.sendParentMessage(parent.chatId, message);
       console.log(`  ⚠️  Уведомление о низком балансе: ${childName} → ${parent.chatId}`);
       
       // Уведомляем администраторов
@@ -219,7 +222,7 @@ module.exports = {
     
     try {
       // Отправляем родителю
-      await this.bot.sendMessage(parent.chatId, message);
+      await this.notificationRouter.sendParentMessage(parent.chatId, message);
       console.log(`  ⏰ Уведомление об истечении срока: ${childName} → ${parent.chatId}`);
       
       // Уведомляем администраторов
@@ -236,14 +239,10 @@ module.exports = {
   
   // Уведомление администраторов
   async notifyAdmins(message) {
-    const mainAdminId = process.env.MAIN_ADMIN_ID;
-    
-    if (mainAdminId) {
-      try {
-        await this.bot.sendMessage(mainAdminId, `🔔 УВЕДОМЛЕНИЕ\n\n${message}`);
-      } catch (error) {
-        console.error('  ❌ Ошибка отправки админу:', error.message);
-      }
+    try {
+      await this.notificationRouter.sendAdminMessage(`🔔 УВЕДОМЛЕНИЕ\n\n${message}`);
+    } catch (error) {
+      console.error('  ❌ Ошибка отправки админу:', error.message);
     }
   },
   

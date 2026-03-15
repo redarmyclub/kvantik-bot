@@ -3,6 +3,7 @@
  */
 
 const logger = require('../utils/logger');
+const createNotificationRouter = require('../utils/notificationRouter');
 
 const questionsModule = {
   name: 'questions',
@@ -14,6 +15,7 @@ const questionsModule = {
     this.bot = context.bot;
     this.data = context.data;
     this.saveData = context.saveData;
+    this.notificationRouter = createNotificationRouter(this.bot, logger);
     
     // Инициализация хранилищ
     if (!this.data.pendingQuestions) {
@@ -181,16 +183,16 @@ const questionsModule = {
       `❓ Вопрос:\n${question}\n\n` +
       `ID: ${questionId}`;
     
-    const MAIN_ADMIN_ID = process.env.MAIN_ADMIN_ID || '805286122';
-    
-    this.bot.sendMessage(MAIN_ADMIN_ID, message, {
-      reply_markup: {
-        inline_keyboard: [[
-          {
-            text: '✅ Ответить',
-            callback_data: `answer_${questionId}`
-          }
-        ]]
+    this.notificationRouter.sendAdminMessage(message, {
+      sendOptions: {
+        reply_markup: {
+          inline_keyboard: [[
+            {
+              text: '✅ Ответить',
+              callback_data: `answer_${questionId}`
+            }
+          ]]
+        }
       }
     }).catch(() => {
       console.log('Не удалось отправить уведомление админу');
@@ -205,9 +207,7 @@ const questionsModule = {
       `📱 Telegram ID: ${chatId}\n\n` +
       `💬 Отзыв:\n${review}`;
     
-    const MAIN_ADMIN_ID = process.env.MAIN_ADMIN_ID || '805286122';
-    
-    this.bot.sendMessage(MAIN_ADMIN_ID, message).catch(() => {
+    this.notificationRouter.sendAdminMessage(message).catch(() => {
       console.log('Не удалось отправить уведомление админу');
     });
   },

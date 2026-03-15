@@ -1,17 +1,62 @@
 require('dotenv').config();
 
+const appEnv = process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'production' : 'development');
+const envSuffix = appEnv === 'production' ? 'PROD' : 'DEV';
+
+function getEnvBySuffix(baseName, fallback = '') {
+  const suffixed = process.env[`${baseName}_${envSuffix}`];
+  if (suffixed !== undefined && suffixed !== '') return suffixed;
+
+  const generic = process.env[baseName];
+  if (generic !== undefined && generic !== '') return generic;
+
+  return fallback;
+}
+
+function getBooleanEnv(name, defaultValue) {
+  const value = process.env[name];
+  if (value === undefined || value === '') return defaultValue;
+  return value === 'true';
+}
+
+const resolvedTelegramToken = getEnvBySuffix('TELEGRAM_BOT_TOKEN', '');
+const resolvedMainAdminId = getEnvBySuffix('MAIN_ADMIN_ID', '');
+const resolvedAdditionalAdmins = getEnvBySuffix('ADDITIONAL_ADMINS', '');
+
+// Совместимость со старыми модулями, которые читают process.env напрямую
+if (resolvedTelegramToken && !process.env.TELEGRAM_BOT_TOKEN) {
+  process.env.TELEGRAM_BOT_TOKEN = resolvedTelegramToken;
+}
+if (resolvedMainAdminId && !process.env.MAIN_ADMIN_ID) {
+  process.env.MAIN_ADMIN_ID = resolvedMainAdminId;
+}
+if (resolvedAdditionalAdmins && !process.env.ADDITIONAL_ADMINS) {
+  process.env.ADDITIONAL_ADMINS = resolvedAdditionalAdmins;
+}
+
 const config = {
+  appEnv,
+
   // Telegram
   telegram: {
-    token: process.env.TELEGRAM_BOT_TOKEN,
+    token: resolvedTelegramToken,
   },
   
   // Администраторы
   admin: {
-    mainAdminId: process.env.MAIN_ADMIN_ID,
-    additionalAdmins: process.env.ADDITIONAL_ADMINS 
-      ? process.env.ADDITIONAL_ADMINS.split(',').map(id => id.trim()).filter(Boolean)
+    mainAdminId: resolvedMainAdminId,
+    additionalAdmins: resolvedAdditionalAdmins
+      ? resolvedAdditionalAdmins.split(',').map(id => id.trim()).filter(Boolean)
       : []
+  },
+
+  // Безопасная маршрутизация уведомлений
+  notifications: {
+    allowParentNotifications: getBooleanEnv('ALLOW_PARENT_NOTIFICATIONS', appEnv === 'production'),
+    dryRun: getBooleanEnv('DRY_RUN_NOTIFICATIONS', false),
+    adminNotificationChatId: getEnvBySuffix('ADMIN_NOTIFICATION_CHAT_ID', resolvedMainAdminId),
+    adminTestChatId: process.env.ADMIN_TEST_CHAT_ID || '',
+    routeAdminToTestChatInDev: appEnv !== 'production' && !!process.env.ADMIN_TEST_CHAT_ID
   },
   
   // OpenAI
@@ -56,6 +101,11 @@ const config = {
     enabled: process.env.BACKUP_ENABLED === 'true',
     intervalHours: parseInt(process.env.BACKUP_INTERVAL_HOURS) || 24,
     keepDays: 7
+  },
+
+  // Посещаемость
+  attendance: {
+    autoStartWatcher: getBooleanEnv('ATTENDANCE_AUTO_START', appEnv === 'production')
   },
   
   // Пути

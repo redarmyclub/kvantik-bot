@@ -7,6 +7,9 @@ const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
 const chokidar = require('chokidar');
+const config = require('../config/config');
+const createNotificationRouter = require('../utils/notificationRouter');
+const logger = require('../utils/logger');
 
 // Глобальные переменные модуля
 let bot = null;
@@ -15,6 +18,7 @@ let users = null;
 let moduleData = {};
 let saveDataFunc = null;
 let getModuleFunc = null; // Для доступа к другим модулям
+let notificationRouter = null;
 
 // Настройки
 let excelPath = '';
@@ -74,10 +78,21 @@ async function sendToAllAdmins(message) {
     }
   }
   
-  // Отправляем всем админам
-  for (const adminId of adminIds) {
+  // Отправляем всем админам (с дедупликацией после маршрутизации)
+  const routedTargets = new Set(
+    adminIds
+      .filter(Boolean)
+      .map(id => notificationRouter ? notificationRouter.resolveAdminChatId(id) : String(id))
+      .filter(Boolean)
+  );
+
+  for (const adminId of routedTargets) {
     try {
-      await bot.sendMessage(adminId, message);
+      if (notificationRouter) {
+        await notificationRouter.sendAdminMessage(message, { chatId: adminId });
+      } else {
+        await bot.sendMessage(adminId, message);
+      }
     } catch (error) {
       // Не прерываем процесс если админ заблокировал бота
       console.log(`  ⚠️  Не удалось отправить админу ${adminId}: ${error.message}`);
@@ -187,7 +202,11 @@ async function sendCheckinNotification(entry, children) {
       `📅 ${new Date().toLocaleDateString('ru-RU')}\n\n` +
       `Детский клуб "Квантик"`;
     
-    await bot.sendMessage(parent.chatId, message);
+    if (notificationRouter) {
+      await notificationRouter.sendParentMessage(parent.chatId, message);
+    } else {
+      await bot.sendMessage(parent.chatId, message);
+    }
 
     // → Всем администраторам (копия)
     await sendToAllAdmins(message);
@@ -245,7 +264,11 @@ async function sendCheckoutNotification(session, children) {
       `Детский клуб "Квантик"`;
 
     // → Родителю
-    await bot.sendMessage(parent.chatId, message);
+    if (notificationRouter) {
+      await notificationRouter.sendParentMessage(parent.chatId, message);
+    } else {
+      await bot.sendMessage(parent.chatId, message);
+    }
 
     // → Всем администраторам (копия)
     await sendToAllAdmins(message);
@@ -459,6 +482,7 @@ module.exports = {
     moduleData = context.data;
     saveDataFunc = context.saveData;
     getModuleFunc = context.getModule; // Для доступа к модулю админов
+    notificationRouter = createNotificationRouter(bot, logger);
     
     // Загружаем сохранённый путь
     excelPath = moduleData.excelPath || '';
@@ -469,7 +493,7 @@ module.exports = {
     
     // 1. Установка пути
     bot.onText(/\/attendance_path (.+)/, async (msg, match) => {
-      if (msg.chat.id != process.env.MAIN_ADMIN_ID) return;
+      if (String(msg.chat.id) !== String(config.admin?.mainAdminId)) return;
       
       const newPath = match[1].trim();
       const result = setExcelPath(newPath);
@@ -478,7 +502,7 @@ module.exports = {
     
     // 2. Запуск мониторинга
     bot.onText(/\/attendance_start/, async (msg) => {
-      if (msg.chat.id != process.env.MAIN_ADMIN_ID) return;
+      if (String(msg.chat.id) !== String(config.admin?.mainAdminId)) return;
       
       const result = startMonitoring();
       bot.sendMessage(msg.chat.id, result.message);
@@ -486,7 +510,7 @@ module.exports = {
     
     // 3. Остановка
     bot.onText(/\/attendance_stop/, async (msg) => {
-      if (msg.chat.id != process.env.MAIN_ADMIN_ID) return;
+      if (String(msg.chat.id) !== String(config.admin?.mainAdminId)) return;
       
       const result = stopMonitoring();
       bot.sendMessage(msg.chat.id, result.message);
@@ -494,7 +518,7 @@ module.exports = {
     
     // 4. Статус
     bot.onText(/\/attendance_status/, async (msg) => {
-      if (msg.chat.id != process.env.MAIN_ADMIN_ID) return;
+      if (String(msg.chat.id) !== String(config.admin?.mainAdminId)) return;
       
       const stats = await getStats();
       
@@ -521,7 +545,7 @@ module.exports = {
     
     // 5. Тест
     bot.onText(/\/attendance_test/, async (msg) => {
-      if (msg.chat.id != process.env.MAIN_ADMIN_ID) return;
+      if (String(msg.chat.id) !== String(config.admin?.mainAdminId)) return;
       
       const result = await testNotification(msg.chat.id);
       bot.sendMessage(msg.chat.id, result.message);
@@ -530,11 +554,13 @@ module.exports = {
     console.log('  ✅ Команды посещаемости зарегистрированы');
     
     // Автозапуск если путь установлен
-    if (excelPath && fs.existsSync(excelPath)) {
+    if (config.attendance?.autoStartWatcher && excelPath && fs.existsSync(excelPath)) {
       setTimeout(() => {
         const result = startMonitoring();
         console.log('  📊', result.message);
       }, 3000);
+    } else if (!config.attendance?.autoStartWatcher) {
+      console.log('  ⚠️  Автозапуск мониторинга отключен (ATTENDANCE_AUTO_START=false)');
     }
   },
   

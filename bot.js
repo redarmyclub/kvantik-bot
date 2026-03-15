@@ -18,9 +18,14 @@ const validator = require('./utils/validator');
 const backup = require('./utils/backup');
 const monitoring = require('./utils/monitoring');
 const ModuleLoader = require('./core/moduleLoader');
+const createNotificationRouter = require('./utils/notificationRouter');
 
 // ============ ИНИЦИАЛИЗАЦИЯ БОТА ============
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN || config.telegram?.token || '7894495477:AAETGSdYcs3O0tAgzvEYmsOtJIYgK-ADsSg';
+const TOKEN = config.telegram?.token;
+if (!TOKEN) {
+  throw new Error('TELEGRAM_BOT_TOKEN не задан. Укажите токен в переменных окружения.');
+}
+
 const bot = new TelegramBot(TOKEN, { 
   polling: {
     interval: 300,
@@ -32,10 +37,9 @@ const bot = new TelegramBot(TOKEN, {
 });
 
 // ============ АДМИНИСТРАТОРЫ ============
-const MAIN_ADMIN_ID = process.env.MAIN_ADMIN_ID || config.admin?.mainAdminId || '805286122';
-const ADDITIONAL_ADMINS = process.env.ADDITIONAL_ADMINS 
-  ? process.env.ADDITIONAL_ADMINS.split(',').map(id => id.trim())
-  : (config.admin?.additionalAdmins || []);
+const MAIN_ADMIN_ID = config.admin?.mainAdminId;
+const ADDITIONAL_ADMINS = config.admin?.additionalAdmins || [];
+const notificationRouter = createNotificationRouter(bot, logger);
 
 // ============ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ============
 let userData = {};
@@ -191,7 +195,7 @@ function showUserMenu(chatId, text = '🏠 Главное меню') {
 
 // Главное меню для администраторов
 function showAdminMenu(chatId, text = '👨‍💼 Админ-панель') {
-  const isMainAdmin = process.env.MAIN_ADMIN_ID === chatId.toString();
+  const isMainAdmin = String(MAIN_ADMIN_ID) === chatId.toString();
   
   const keyboard = {
     reply_markup: {
@@ -1098,7 +1102,7 @@ bot.on('message', async (msg) => {
     
     // Управление админами (только для главного админа)
     if (text === '👑 Управление админами') {
-      const isMainAdmin = process.env.MAIN_ADMIN_ID === chatId.toString();
+      const isMainAdmin = String(MAIN_ADMIN_ID) === chatId.toString();
       
       if (!isMainAdmin) {
         bot.sendMessage(chatId, '❌ Эта функция доступна только главному администратору');
@@ -1110,7 +1114,7 @@ bot.on('message', async (msg) => {
     }
     
     if (text === '➕ Добавить администратора') {
-      const isMainAdmin = process.env.MAIN_ADMIN_ID === chatId.toString();
+      const isMainAdmin = String(MAIN_ADMIN_ID) === chatId.toString();
       
       if (!isMainAdmin) {
         bot.sendMessage(chatId, '❌ Доступно только главному администратору');
@@ -1130,7 +1134,7 @@ bot.on('message', async (msg) => {
     }
     
     if (text === '➖ Удалить администратора') {
-      const isMainAdmin = process.env.MAIN_ADMIN_ID === chatId.toString();
+      const isMainAdmin = String(MAIN_ADMIN_ID) === chatId.toString();
       
       if (!isMainAdmin) {
         bot.sendMessage(chatId, '❌ Доступно только главному администратору');
@@ -1166,7 +1170,7 @@ bot.on('message', async (msg) => {
     }
     
     if (text === '📋 Список администраторов') {
-      const isMainAdmin = process.env.MAIN_ADMIN_ID === chatId.toString();
+      const isMainAdmin = String(MAIN_ADMIN_ID) === chatId.toString();
       
       if (!isMainAdmin) {
         bot.sendMessage(chatId, '❌ Доступно только главному администратору');
@@ -1339,19 +1343,16 @@ async function handleUserState(chatId, text, action, user) {
       logger.info('PROMO', chatId, `Promo code activated: ${code}`);
       
       // Уведомляем админов
-      const admins = Object.keys(userData).filter(id => isAdmin(id));
-      for (const adminId of admins) {
-        try {
-          await bot.sendMessage(adminId,
-            `🎟️ ПРОМОКОД ИСПОЛЬЗОВАН\n\n` +
-            `Код: ${code}\n` +
-            `Пользователь: ${user.parentName || 'Гость'} (ID: ${chatId})\n` +
-            `Тип: ${promo.type}\n` +
-            `Значение: ${promo.value}`
-          );
-        } catch (error) {
-          // Игнорируем ошибки отправки админам
-        }
+      try {
+        await notificationRouter.sendAdminMessage(
+          `🎟️ ПРОМОКОД ИСПОЛЬЗОВАН\n\n` +
+          `Код: ${code}\n` +
+          `Пользователь: ${user.parentName || 'Гость'} (ID: ${chatId})\n` +
+          `Тип: ${promo.type}\n` +
+          `Значение: ${promo.value}`
+        );
+      } catch (error) {
+        // Игнорируем ошибки отправки админам
       }
       
       showUserMenu(chatId);
@@ -1851,12 +1852,15 @@ async function startBot() {
     logger.info('SYSTEM', 'Bot started successfully');
     
     // Уведомление главного админа
-    bot.sendMessage(MAIN_ADMIN_ID, 
-      `✅ Бот успешно запущен\n\n` +
-      `📦 Модулей: ${moduleLoader.getStats().total}\n` +
-      `👥 Пользователей: ${Object.keys(userData).length}\n` +
-      `📊 Версия: 2.0.0`
-    ).catch(() => {});
+    if (MAIN_ADMIN_ID) {
+      notificationRouter.sendAdminMessage(
+        `✅ Бот успешно запущен\n\n` +
+        `📦 Модулей: ${moduleLoader.getStats().total}\n` +
+        `👥 Пользователей: ${Object.keys(userData).length}\n` +
+        `📊 Версия: 2.0.0`,
+        { chatId: MAIN_ADMIN_ID }
+      ).catch(() => {});
+    }
     
   } catch (error) {
     console.error('❌ Ошибка запуска бота:', error);
