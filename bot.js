@@ -130,7 +130,7 @@ function clearPendingUserState(chatId) {
   return changed;
 }
 
-function isTopLevelMenuButton(text) {
+function isInterruptingMenuButton(text) {
   const menuButtons = new Set([
     '🏠 Главное меню',
     'Меню',
@@ -152,7 +152,31 @@ function isTopLevelMenuButton(text) {
     '⚙️ Настройки',
     '👤 Пользовательский режим',
     '👑 Управление админами',
-    '🔙 Назад в админ-панель'
+    '🔙 Назад в админ-панель',
+    '📋 Список пользователей',
+    '🔍 Найти пользователя',
+    '📈 Статистика',
+    '📋 Просмотр напоминаний',
+    '📅 Установить пробное',
+    '💰 Установить оплату',
+    '👋 Отметить посещение',
+    '➕ Создать промокод',
+    '📋 Список промокодов',
+    '📊 Статистика промокодов',
+    '📅 Сегодня',
+    '📆 Завтра',
+    '📊 На неделю',
+    '📥 Экспорт пользователей',
+    '📥 Экспорт статистики',
+    '➕ Добавить администратора',
+    '➖ Удалить администратора',
+    '📋 Список администраторов',
+    '📈 Общая статистика',
+    '📋 Конверсия',
+    '📤 Всем',
+    '✅ Зарегистрированным',
+    '⏳ Незарегистрированным',
+    '🔙 Назад'
   ]);
 
   return menuButtons.has(text);
@@ -444,6 +468,25 @@ bot.onText(/\/help/, (msg) => {
   bot.sendMessage(chatId, helpMessage);
 });
 
+// Команда /cancel
+bot.onText(/\/cancel/, (msg) => {
+  const chatId = msg.chat.id;
+
+  if (isUserBanned(chatId)) return;
+  if (checkMessageSpam(chatId)) return;
+
+  const wasStateCleared = clearPendingUserState(chatId);
+  if (wasStateCleared) {
+    saveData();
+  }
+
+  if (isAdmin(chatId)) {
+    showAdminMenu(chatId, '❌ Текущий сценарий отменён');
+  } else {
+    showUserMenu(chatId, '❌ Текущий сценарий отменён');
+  }
+});
+
 // Команда /status
 bot.onText(/\/status/, (msg) => {
   const chatId = msg.chat.id;
@@ -562,8 +605,8 @@ bot.on('message', async (msg) => {
   const user = getUserData(chatId);
   const admin = isAdmin(chatId);
 
-  // Любая кнопка верхнего меню должна прерывать застрявший сценарий
-  if (isTopLevelMenuButton(text)) {
+  // Любая кнопка меню/навигации должна прерывать застрявший сценарий
+  if (isInterruptingMenuButton(text)) {
     const wasStateCleared = clearPendingUserState(chatId);
     if (wasStateCleared) {
       saveData();
