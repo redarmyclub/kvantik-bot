@@ -92,6 +92,72 @@ function getUserData(chatId) {
   return userData[chatId];
 }
 
+function clearPendingUserState(chatId) {
+  const user = getUserData(chatId);
+  let changed = false;
+
+  // Локальные временные поля в профиле пользователя
+  const localTempFields = [
+    'adminAction',
+    'userAction',
+    'adminTargetId',
+    'stage',
+    'tempChild',
+    'tempData',
+    'editingChildIndex',
+    'draftRegistration',
+    'registrationDraft',
+    'pendingReminderAction',
+    'pendingReminderTargetId'
+  ];
+
+  for (const field of localTempFields) {
+    if (Object.prototype.hasOwnProperty.call(user, field)) {
+      delete user[field];
+      changed = true;
+    }
+  }
+
+  // Временные состояния в модулях (registration/questions и любые аналогичные)
+  for (const [moduleName, module] of moduleLoader.modules) {
+    if (module?.data?.userStates && Object.prototype.hasOwnProperty.call(module.data.userStates, chatId)) {
+      delete module.data.userStates[chatId];
+      moduleLoader.saveModuleData(moduleName);
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function isTopLevelMenuButton(text) {
+  const menuButtons = new Set([
+    '🏠 Главное меню',
+    'Меню',
+    '📝 Регистрация',
+    '👶 Добавить ребёнка',
+    '❓ Задать вопрос',
+    '⭐️ Оставить отзыв',
+    '🎟️ Ввести промокод',
+    'ℹ️ О клубе',
+    '👥 Пользователи',
+    '❓ Неотвеченные',
+    '📢 Рассылка',
+    '✉️ Отправить сообщение',
+    '📊 Статистика',
+    '💾 Экспорт',
+    '⏰ Напоминания',
+    '🎟️ Промокоды',
+    '📅 Расписание',
+    '⚙️ Настройки',
+    '👤 Пользовательский режим',
+    '👑 Управление админами',
+    '🔙 Назад в админ-панель'
+  ]);
+
+  return menuButtons.has(text);
+}
+
 function saveData() {
   try {
     storage.saveSync('users', userData);
@@ -326,6 +392,11 @@ bot.onText(/\/start/, (msg) => {
   if (checkMessageSpam(chatId)) return;
   
   const user = getUserData(chatId);
+
+  const wasStateCleared = clearPendingUserState(chatId);
+  if (wasStateCleared) {
+    saveData();
+  }
   
   let welcomeMessage;
   
@@ -490,6 +561,14 @@ bot.on('message', async (msg) => {
   
   const user = getUserData(chatId);
   const admin = isAdmin(chatId);
+
+  // Любая кнопка верхнего меню должна прерывать застрявший сценарий
+  if (isTopLevelMenuButton(text)) {
+    const wasStateCleared = clearPendingUserState(chatId);
+    if (wasStateCleared) {
+      saveData();
+    }
+  }
   
   // КРИТИЧНО: Обработка состояний администратора ПЕРЕД всем остальным
   if (admin && user.adminAction) {
