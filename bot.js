@@ -639,6 +639,17 @@ bot.on('message', async (msg) => {
   const user = getUserData(chatId);
   const admin = isAdminInteractionMode(chatId);
 
+  // Глобальный прерыватель: для админ-аккаунта всегда возвращаем в админ-режим
+  if (text === '👨‍💼 Админ-панель' && isAdmin(chatId)) {
+    const wasStateCleared = clearPendingUserState(chatId);
+    const wasUserModeReset = setForceUserMode(chatId, false);
+    if (wasStateCleared || wasUserModeReset) {
+      saveData();
+    }
+    showAdminMenu(chatId);
+    return;
+  }
+
   // Любая кнопка меню/навигации должна прерывать застрявший сценарий
   if (isInterruptingMenuButton(text)) {
     const wasStateCleared = clearPendingUserState(chatId);
@@ -695,16 +706,6 @@ bot.on('message', async (msg) => {
   // === ОБЩИЕ КНОПКИ ===
   if (text === '🏠 Главное меню' || text === 'Меню') {
     showMainMenu(chatId);
-    return;
-  }
-
-  if (text === '👨‍💼 Админ-панель' && isAdmin(chatId)) {
-    const wasStateCleared = clearPendingUserState(chatId);
-    const wasUserModeReset = setForceUserMode(chatId, false);
-    if (wasStateCleared || wasUserModeReset) {
-      saveData();
-    }
-    showAdminMenu(chatId);
     return;
   }
   
