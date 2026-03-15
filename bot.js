@@ -80,6 +80,36 @@ function isMainAdmin(chatId) {
   return String(chatId) === String(MAIN_ADMIN_ID);
 }
 
+function isForceUserMode(chatId) {
+  if (!isAdmin(chatId)) return false;
+  const user = getUserData(chatId);
+  return user.forceUserMode === true;
+}
+
+function isAdminInteractionMode(chatId) {
+  return isAdmin(chatId) && !isForceUserMode(chatId);
+}
+
+function setForceUserMode(chatId, enabled) {
+  if (!isAdmin(chatId)) return false;
+
+  const user = getUserData(chatId);
+  const nextValue = enabled === true;
+
+  if (nextValue) {
+    if (user.forceUserMode === true) return false;
+    user.forceUserMode = true;
+    return true;
+  }
+
+  if (user.forceUserMode === true) {
+    delete user.forceUserMode;
+    return true;
+  }
+
+  return false;
+}
+
 function getUserData(chatId) {
   if (!userData[chatId]) {
     userData[chatId] = {
@@ -133,6 +163,7 @@ function clearPendingUserState(chatId) {
 function isInterruptingMenuButton(text) {
   const menuButtons = new Set([
     '🏠 Главное меню',
+    '👨‍💼 Админ-панель',
     'Меню',
     '📝 Регистрация',
     '👶 Добавить ребёнка',
@@ -269,13 +300,19 @@ function banUser(chatId, reason = 'спам') {
 
 // Главное меню для пользователей
 function showUserMenu(chatId, text = '🏠 Главное меню') {
+  const keyboardRows = [
+    ['📝 Регистрация', '👶 Добавить ребёнка'],
+    ['❓ Задать вопрос', '⭐️ Оставить отзыв'],
+    ['🎟️ Ввести промокод', 'ℹ️ О клубе']
+  ];
+
+  if (isAdmin(chatId)) {
+    keyboardRows.push(['👨‍💼 Админ-панель']);
+  }
+
   const keyboard = {
     reply_markup: {
-      keyboard: [
-        ['📝 Регистрация', '👶 Добавить ребёнка'],
-        ['❓ Задать вопрос', '⭐️ Оставить отзыв'],
-        ['🎟️ Ввести промокод', 'ℹ️ О клубе']
-      ],
+      keyboard: keyboardRows,
       resize_keyboard: true
     }
   };
@@ -401,7 +438,7 @@ function showAdminManagementMenu(chatId) {
 
 // Универсальная функция показа меню
 function showMainMenu(chatId, text) {
-  if (isAdmin(chatId)) {
+  if (isAdminInteractionMode(chatId)) {
     showAdminMenu(chatId, text);
   } else {
     showUserMenu(chatId, text);
@@ -418,7 +455,8 @@ bot.onText(/\/start/, (msg) => {
   const user = getUserData(chatId);
 
   const wasStateCleared = clearPendingUserState(chatId);
-  if (wasStateCleared) {
+  const wasUserModeReset = setForceUserMode(chatId, false);
+  if (wasStateCleared || wasUserModeReset) {
     saveData();
   }
   
@@ -480,11 +518,7 @@ bot.onText(/\/cancel/, (msg) => {
     saveData();
   }
 
-  if (isAdmin(chatId)) {
-    showAdminMenu(chatId, '❌ Текущий сценарий отменён');
-  } else {
-    showUserMenu(chatId, '❌ Текущий сценарий отменён');
-  }
+  showMainMenu(chatId, '❌ Текущий сценарий отменён');
 });
 
 // Команда /status
@@ -603,7 +637,7 @@ bot.on('message', async (msg) => {
   if (checkMessageSpam(chatId)) return;
   
   const user = getUserData(chatId);
-  const admin = isAdmin(chatId);
+  const admin = isAdminInteractionMode(chatId);
 
   // Любая кнопка меню/навигации должна прерывать застрявший сценарий
   if (isInterruptingMenuButton(text)) {
@@ -661,6 +695,16 @@ bot.on('message', async (msg) => {
   // === ОБЩИЕ КНОПКИ ===
   if (text === '🏠 Главное меню' || text === 'Меню') {
     showMainMenu(chatId);
+    return;
+  }
+
+  if (text === '👨‍💼 Админ-панель' && isAdmin(chatId)) {
+    const wasStateCleared = clearPendingUserState(chatId);
+    const wasUserModeReset = setForceUserMode(chatId, false);
+    if (wasStateCleared || wasUserModeReset) {
+      saveData();
+    }
+    showAdminMenu(chatId);
     return;
   }
   
@@ -750,7 +794,12 @@ bot.on('message', async (msg) => {
   if (admin) {
     // Главное админ-меню
     if (text === '👤 Пользовательский режим') {
-      showUserMenu(chatId, 'Переключено в пользовательский режим.\nДля возврата используйте /start');
+      const wasStateCleared = clearPendingUserState(chatId);
+      const wasUserModeEnabled = setForceUserMode(chatId, true);
+      if (wasStateCleared || wasUserModeEnabled) {
+        saveData();
+      }
+      showUserMenu(chatId, 'Переключено в пользовательский режим.\nДля возврата используйте "👨‍💼 Админ-панель" или /start');
       return;
     }
     
