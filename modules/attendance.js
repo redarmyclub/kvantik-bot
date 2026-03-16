@@ -33,6 +33,8 @@ let lastLogSize = 0;
 let lastCurrentSession = new Map();
 let isMonitoring = false;
 let watcher = null;
+let isCheckingChanges = false;
+let hasPendingCheck = false;
 
 // ============= ОСНОВНЫЕ ФУНКЦИИ =============
 
@@ -61,8 +63,7 @@ function findParentByPhone(phone) {
   return null;
 }
 
-// Отправка сообщения всем администраторам
-async function sendToAllAdmins(message) {
+function getAdminTargets() {
   // Получаем модуль управления администраторами
   const adminModule = getModuleFunc ? getModuleFunc('adminNotifications') : null;
   
@@ -78,24 +79,60 @@ async function sendToAllAdmins(message) {
     }
   }
   
-  // Отправляем всем админам (с дедупликацией после маршрутизации)
-  const routedTargets = new Set(
+  // Список админов после маршрутизации и дедупликации
+  return new Set(
     adminIds
       .filter(Boolean)
       .map(id => notificationRouter ? notificationRouter.resolveAdminChatId(id) : String(id))
       .filter(Boolean)
   );
+}
 
-  for (const adminId of routedTargets) {
+function buildNotificationTargets(parentChatId) {
+  const targets = new Map();
+
+  if (parentChatId) {
+    const normalizedParentChatId = String(parentChatId);
+    targets.set(normalizedParentChatId, new Set(['parent']));
+  }
+
+  for (const adminId of getAdminTargets()) {
+    const existingRoles = targets.get(adminId);
+    if (existingRoles) {
+      existingRoles.add('admin');
+    } else {
+      targets.set(adminId, new Set(['admin']));
+    }
+  }
+
+  const overlapTargets = Array.from(targets.entries())
+    .filter(([, roles]) => roles.has('parent') && roles.has('admin'))
+    .map(([chatId]) => chatId);
+
+  return { targets, overlapTargets };
+}
+
+async function sendAttendanceMessageToTargets(message, targets, overlapTargets) {
+  console.log(`  📨 Получателей уведомления: ${targets.size}`);
+  if (overlapTargets.length > 0) {
+    console.log(`  🔁 Пересечение parent/admin: ${overlapTargets.join(', ')}`);
+  }
+
+  for (const [chatId, roles] of targets.entries()) {
     try {
-      if (notificationRouter) {
-        await notificationRouter.sendAdminMessage(message, { chatId: adminId });
+      if (!notificationRouter) {
+        await bot.sendMessage(chatId, message);
+        continue;
+      }
+
+      if (roles.has('admin')) {
+        await notificationRouter.sendAdminMessage(message, { chatId });
       } else {
-        await bot.sendMessage(adminId, message);
+        await notificationRouter.sendParentMessage(chatId, message);
       }
     } catch (error) {
-      // Не прерываем процесс если админ заблокировал бота
-      console.log(`  ⚠️  Не удалось отправить админу ${adminId}: ${error.message}`);
+      // Не прерываем процесс если получатель заблокировал бота
+      console.log(`  ⚠️  Не удалось отправить в ${chatId}: ${error.message}`);
     }
   }
 }
@@ -201,15 +238,9 @@ async function sendCheckinNotification(entry, children) {
       `⏰ Время прихода: ${entry.time_in}\n` +
       `📅 ${new Date().toLocaleDateString('ru-RU')}\n\n` +
       `Детский клуб "Квантик"`;
-    
-    if (notificationRouter) {
-      await notificationRouter.sendParentMessage(parent.chatId, message);
-    } else {
-      await bot.sendMessage(parent.chatId, message);
-    }
 
-    // → Всем администраторам (копия)
-    await sendToAllAdmins(message);
+    const { targets, overlapTargets } = buildNotificationTargets(parent.chatId);
+    await sendAttendanceMessageToTargets(message, targets, overlapTargets);
 
     console.log(`  ✅ Уведомление о приходе: ${childFullName} → ${parent.chatId}`);
     
@@ -263,15 +294,8 @@ async function sendCheckoutNotification(session, children) {
       expirationLine +
       `Детский клуб "Квантик"`;
 
-    // → Родителю
-    if (notificationRouter) {
-      await notificationRouter.sendParentMessage(parent.chatId, message);
-    } else {
-      await bot.sendMessage(parent.chatId, message);
-    }
-
-    // → Всем администраторам (копия)
-    await sendToAllAdmins(message);
+    const { targets, overlapTargets } = buildNotificationTargets(parent.chatId);
+    await sendAttendanceMessageToTargets(message, targets, overlapTargets);
 
     console.log(`  👋 Уведомление об уходе: ${childFullName} → ${parent.chatId}`);
     
@@ -281,6 +305,14 @@ async function sendCheckoutNotification(session, children) {
 }
 
 async function checkChanges() {
+  if (isCheckingChanges) {
+    hasPendingCheck = true;
+    console.log('  ⏳ Проверка уже выполняется, ставим повторную проверку в очередь');
+    return;
+  }
+
+  isCheckingChanges = true;
+
   try {
     const data = await readExcelFile();
     
@@ -316,6 +348,13 @@ async function checkChanges() {
     
   } catch (error) {
     console.error('  ❌ Ошибка проверки изменений:', error.message);
+  } finally {
+    isCheckingChanges = false;
+
+    if (hasPendingCheck) {
+      hasPendingCheck = false;
+      checkChanges();
+    }
   }
 }
 
