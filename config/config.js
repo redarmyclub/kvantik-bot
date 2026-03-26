@@ -105,7 +105,10 @@ const config = {
 
   // Посещаемость
   attendance: {
-    autoStartWatcher: getBooleanEnv('ATTENDANCE_AUTO_START', appEnv === 'production')
+    autoStartWatcher: getBooleanEnv('ATTENDANCE_AUTO_START', appEnv === 'production'),
+    source: (process.env.ATTENDANCE_SOURCE || 'excel').toLowerCase(),
+    sqliteDbPath: process.env.ATTENDANCE_SQLITE_DB_PATH || '/opt/kvantik-rfid/data/kvantik.db',
+    sqlitePollMs: parseInt(process.env.ATTENDANCE_SQLITE_POLL_MS, 10) || 3000
   },
   
   // Пути
