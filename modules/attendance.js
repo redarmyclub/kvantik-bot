@@ -322,13 +322,19 @@ function formatEventTimeToHHMM(value) {
   if (!value) return '';
   const text = String(value).trim();
 
+  // Full datetime stored as UTC (YYYY-MM-DD HH:MM:SS or ISO) — append Z and convert to local
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(text)) {
+    const normalized = text.replace(' ', 'T');
+    const utcStr = normalized.endsWith('Z') ? normalized : normalized + 'Z';
+    const dateObj = new Date(utcStr);
+    if (!Number.isNaN(dateObj.getTime())) {
+      return dateObj.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    }
+  }
+
+  // Plain time string (HH:MM or HH:MM:SS) — extract HH:MM directly
   const direct = text.match(/\b(\d{2}:\d{2})/);
   if (direct) return direct[1];
-
-  const dateObj = new Date(text);
-  if (!Number.isNaN(dateObj.getTime())) {
-    return dateObj.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  }
 
   return '';
 }
