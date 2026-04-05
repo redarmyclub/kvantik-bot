@@ -1,0 +1,24 @@
+name: Workbook Runtime Guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+      - dev
+
+jobs:
+  guard-workbook-runtime:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run bot workbook runtime guard
+        run: |
+          echo "Running bot workbook runtime guard..."
+          echo "If this fails, keep workbook access only in approved legacy-gated or export-only files."
+          bash scripts/guard_no_workbook_runtime.sh
