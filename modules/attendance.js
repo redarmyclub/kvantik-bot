@@ -435,6 +435,46 @@ function parseAttendanceEventRows(rawOutput) {
     .filter(row => Number.isFinite(row.id));
 }
 
+/**
+ * Parse a date string from SQLite (DD.MM.YYYY or ISO) into a Date object.
+ * Returns null if the value is absent or unparseable.
+ */
+function parseSqliteDate(value) {
+  if (!value) return null;
+  const str = String(value).trim();
+  // Russian DD.MM.YYYY format (stored by the RFID app)
+  const ruMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (ruMatch) {
+    const d = new Date(Number(ruMatch[3]), Number(ruMatch[2]) - 1, Number(ruMatch[1]));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // ISO or other standard format
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Fetch child profile data from SQLite for one card_id.
+ * Returns { first_name, last_name, parent_phone, remaining_hours, valid_until }
+ * or null if the child is not found.
+ */
+async function enrichEventFromSqlite(cardId) {
+  return new Promise((resolve) => {
+    const safeId = String(cardId).replace(/'/g, "''");
+    const query =
+      'SELECT c.first_name, c.last_name, c.parent_phone, ' +
+      '       s.remaining_hours, s.valid_until ' +
+      'FROM children c ' +
+      'LEFT JOIN subscriptions s ON s.child_id = c.id AND s.is_active = 1 ' +
+      `WHERE c.card_id = '${safeId}' LIMIT 1;`;
+    execFile('sqlite3', ['-json', sqliteDbPath, query], { maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      if (err || !stdout) return resolve(null);
+      try { resolve(JSON.parse(stdout)[0] || null); }
+      catch { resolve(null); }
+    });
+  });
+}
+
 async function pollSqliteAttendanceEvents() {
   if (!isMonitoring || attendanceSource !== 'sqlite') return;
   if (sqlitePollInProgress) return;
@@ -443,11 +483,6 @@ async function pollSqliteAttendanceEvents() {
 
   try {
     await initializeSqliteCursor();
-
-    if (!excelPath || !fs.existsSync(excelPath)) {
-      console.log('  ⚠️  SQLite mode: excelPath не установлен или файл не найден; событие не обработано');
-      return;
-    }
 
     const query = [
       'SELECT',
@@ -467,10 +502,31 @@ async function pollSqliteAttendanceEvents() {
     const rows = parseAttendanceEventRows(rowsRaw);
     if (rows.length === 0) return;
 
-    const data = await readExcelFile();
-
     for (const row of rows) {
-      const processed = await handleAttendanceEvent(row, data.children);
+      // Enrich from SQLite — no workbook needed in sqlite mode.
+      const enriched = await enrichEventFromSqlite(row.card_id);
+      if (!enriched) {
+        logger.warn(
+          `enrichEventFromSqlite: no SQLite record for card_id=${row.card_id}; ` +
+          'skipping notification, advancing cursor'
+        );
+        sqliteLastProcessedId = row.id;
+        moduleData.sqliteLastProcessedId = sqliteLastProcessedId;
+        if (saveDataFunc) saveDataFunc();
+        continue;
+      }
+
+      // Build a child-profile object compatible with the send-notification helpers.
+      const childProfile = {
+        card_id: row.card_id,
+        first_name: enriched.first_name || '',
+        last_name: enriched.last_name || '',
+        parent_phone: enriched.parent_phone || '',
+        remaining_hours: Number(enriched.remaining_hours) || 0,
+        expiration_date: parseSqliteDate(enriched.valid_until)
+      };
+
+      const processed = await handleAttendanceEvent(row, [childProfile]);
       if (!processed) {
         console.log(`  ⚠️  SQLite событие id=${row.id} не обработано, курсор не сдвинут`);
         break;
@@ -716,7 +772,7 @@ async function getStats() {
     sqliteLastProcessedId
   };
   
-  if (stats.fileExists) {
+  if (stats.source === 'excel' && stats.fileExists) {
     try {
       const data = await readExcelFile();
       stats.totalChildren = data.children.length;
