@@ -776,7 +776,7 @@ async function getStats() {
     sqliteLastProcessedId
   };
   
-  if (stats.fileExists) {
+  if (stats.source === 'excel' && stats.fileExists) {
     try {
       const data = await readExcelFile();
       stats.totalChildren = data.children.length;
