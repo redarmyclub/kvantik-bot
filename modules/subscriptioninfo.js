@@ -34,8 +34,9 @@ module.exports = {
       this.data.notifiedUsers = {};
     }
     
-    // Получаем путь к Excel
-    this.excelPath = this.getExcelPath();
+    // В sqlite-режиме не трогаем workbook path на старте.
+    const attendanceSource = this.getAttendanceSource();
+    this.excelPath = attendanceSource === 'excel' ? this.getExcelPath() : '';
     
     console.log('  💳 Модуль информации об абонементе v2.0 инициализирован');
     
@@ -68,6 +69,25 @@ module.exports = {
     
     return this.data.excelPath || '';
   },
+
+  getAttendanceSource() {
+    try {
+      const conf = require('../config/config');
+      return String(conf.attendance?.source || 'excel').toLowerCase();
+    } catch {
+      return 'excel';
+    }
+  },
+
+  // Получение пути к SQLite базе данных
+  getSqliteDbPath() {
+    try {
+      const conf = require('../config/config');
+      return conf.attendance?.sqliteDbPath || '/opt/kvantik-rfid/data/kvantik.db';
+    } catch {
+      return '/opt/kvantik-rfid/data/kvantik.db';
+    }
+  },
   
   // Запуск периодической проверки
   startPeriodicCheck() {
@@ -87,15 +107,21 @@ module.exports = {
   // Проверка всех абонементов
   async checkAllSubscriptions() {
     try {
-      this.excelPath = this.getExcelPath();
-      
-      if (!this.excelPath || !fs.existsSync(this.excelPath)) {
-        return;
-      }
-      
       console.log('  🔍 Проверка абонементов...');
-      
-      const children = await this.readChildrenData();
+
+      const attendanceSource = this.getAttendanceSource();
+      let children = [];
+      if (attendanceSource === 'sqlite') {
+        const dbPath = this.getSqliteDbPath();
+        children = await this.readChildrenFromSqlite(dbPath);
+      } else {
+        this.excelPath = this.getExcelPath();
+        if (!this.excelPath || !fs.existsSync(this.excelPath)) {
+          return;
+        }
+        children = await this.readChildrenData();
+      }
+
       const currentDate = new Date();
       
       for (const child of children) {
@@ -251,7 +277,7 @@ module.exports = {
     const chatId = msg.chat.id;
     
     try {
-      this.excelPath = this.getExcelPath();
+      const attendanceSource = this.getAttendanceSource();
       
       const user = this.users[chatId];
       
@@ -271,14 +297,20 @@ module.exports = {
         );
       }
       
-      if (!this.excelPath || !fs.existsSync(this.excelPath)) {
-        return this.bot.sendMessage(chatId,
-          '❌ Система временно недоступна.\n\n' +
-          'Обратитесь к администратору.'
-        );
+      let children = [];
+      if (attendanceSource === 'sqlite') {
+        const dbPath = this.getSqliteDbPath();
+        children = await this.readChildrenFromSqlite(dbPath);
+      } else {
+        this.excelPath = this.getExcelPath();
+        if (!this.excelPath || !fs.existsSync(this.excelPath)) {
+          return this.bot.sendMessage(chatId,
+            '❌ Система временно недоступна.\n\n' +
+            'Обратитесь к администратору.'
+          );
+        }
+        children = await this.readChildrenData();
       }
-      
-      const children = await this.readChildrenData();
       
       const userChildren = children.filter(child => 
         this.normalizePhone(child.parent_phone) === userPhone
@@ -407,6 +439,53 @@ module.exports = {
     });
     
     return children;
+  },
+
+  // Чтение данных о детях из SQLite (заменяет readChildrenData в sqlite-режиме)
+  async readChildrenFromSqlite(dbPath) {
+    return new Promise((resolve, reject) => {
+      const { execFile } = require('child_process');
+      const query =
+        'SELECT c.card_id, c.first_name, c.last_name, c.parent_phone, c.status, ' +
+        '       s.package_hours, s.used_hours, s.remaining_hours, s.valid_until ' +
+        'FROM children c ' +
+        'LEFT JOIN subscriptions s ON s.child_id = c.id AND s.is_active = 1 ' +
+        "WHERE c.status = 'active' ORDER BY c.first_name;";
+      execFile('sqlite3', ['-json', dbPath, query], { maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+        if (err) return reject(err);
+        try {
+          const rows = JSON.parse(stdout || '[]');
+          const children = rows.map(row => {
+            let expirationDate = null;
+            if (row.valid_until) {
+              const str = String(row.valid_until).trim();
+              const ruMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+              if (ruMatch) {
+                const d = new Date(Number(ruMatch[3]), Number(ruMatch[2]) - 1, Number(ruMatch[1]));
+                expirationDate = isNaN(d.getTime()) ? null : d;
+              } else {
+                const d = new Date(str);
+                expirationDate = isNaN(d.getTime()) ? null : d;
+              }
+            }
+            return {
+              card_id: row.card_id || '',
+              first_name: row.first_name || '',
+              last_name: row.last_name || '',
+              parent_phone: row.parent_phone || '',
+              status: row.status || 'active',
+              package_hours: Number(row.package_hours) || 0,
+              used_hours: Number(row.used_hours) || 0,
+              remaining_hours: Number(row.remaining_hours) || 0,
+              expiration_date: expirationDate
+            };
+          });
+          resolve(children);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
   },
   
   // Поиск родителя по телефону
