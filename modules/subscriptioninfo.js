@@ -34,8 +34,9 @@ module.exports = {
       this.data.notifiedUsers = {};
     }
     
-    // Получаем путь к Excel
-    this.excelPath = this.getExcelPath();
+    // В sqlite-режиме не трогаем workbook path на старте.
+    const attendanceSource = this.getAttendanceSource();
+    this.excelPath = attendanceSource === 'excel' ? this.getExcelPath() : '';
     
     console.log('  💳 Модуль информации об абонементе v2.0 инициализирован');
     
@@ -67,6 +68,15 @@ module.exports = {
     }
     
     return this.data.excelPath || '';
+  },
+
+  getAttendanceSource() {
+    try {
+      const conf = require('../config/config');
+      return String(conf.attendance?.source || 'excel').toLowerCase();
+    } catch {
+      return 'excel';
+    }
   },
 
   // Получение пути к SQLite базе данных
