@@ -42,7 +42,8 @@ let sqlitePollInProgress = false;
 let sqliteLastProcessedId = 0;
 let sqliteCursorInitialized = false;
 
-const attendanceSource = String(config.attendance?.source || 'excel').toLowerCase();
+const attendanceSource = String(config.attendance?.source || 'sqlite').toLowerCase();
+const allowLegacyExcelRuntime = !!config.runtime?.allowLegacyExcelRuntime;
 const sqliteDbPath = config.attendance?.sqliteDbPath || '/opt/kvantik-rfid/data/kvantik.db';
 const sqlitePollMs = Number(config.attendance?.sqlitePollMs) || 3000;
 
@@ -283,6 +284,7 @@ async function sendCheckoutNotification(session, children) {
 
     // Остаток часов (красиво: 1 час / 2 часа / 5 часов)
     const h = Math.round((child.remaining_hours || 0) * 10) / 10;
+    const lunchBalance = await getLunchBalanceForCard(session.card_id);
     const abs = Math.floor(Math.abs(h));
     let hoursWord;
     if (abs % 100 >= 11 && abs % 100 <= 14)   hoursWord = 'часов';
@@ -303,6 +305,7 @@ async function sendCheckoutNotification(session, children) {
       `📅 ${today}\n` +
       `В абонементе осталось:\n` +
       `${h} ${hoursWord}.\n` +
+      `Осталось обедов: ${lunchBalance}\n` +
       expirationLine +
       `Детский клуб "Квантик"`;
 
@@ -383,6 +386,30 @@ function runSqliteQuery(sql) {
       }
     );
   });
+}
+
+async function getLunchBalanceForCard(cardId) {
+  if (!cardId) return 0;
+
+  const safeId = String(cardId).replace(/'/g, "''");
+  const query = [
+    'SELECT COALESCE(lb.balance, 0)',
+    'FROM children c',
+    'LEFT JOIN lunch_balances lb ON lb.child_id = c.id',
+    `WHERE c.card_id = '${safeId}'`,
+    'LIMIT 1;'
+  ].join(' ');
+
+  try {
+    const rawBalance = await runSqliteQuery(query);
+    if (!rawBalance) return 0;
+
+    const balance = Number(rawBalance);
+    return Number.isFinite(balance) ? Math.trunc(balance) : 0;
+  } catch (error) {
+    logger.warn(`getLunchBalanceForCard: failed to read lunch balance for card_id=${cardId}: ${error.message}`);
+    return 0;
+  }
 }
 
 async function ensureSqliteSourceReady() {
@@ -729,6 +756,14 @@ function stopMonitoring() {
 
 async function startMonitoring() {
   if (attendanceSource === 'excel') {
+    if (!allowLegacyExcelRuntime) {
+      console.log('  ⛔ Excel runtime path disabled (ALLOW_LEGACY_EXCEL_RUNTIME=false)');
+      return {
+        success: false,
+        message: '⛔ Excel runtime path disabled. SQLite is the operational source of truth.'
+      };
+    }
+
     console.log('  📡 Attendance source selected: excel');
     return startExcelMonitoring();
   }
@@ -744,6 +779,13 @@ async function startMonitoring() {
 }
 
 function setExcelPath(newPath) {
+  if (!allowLegacyExcelRuntime) {
+    return {
+      success: false,
+      message: '⛔ Excel path updates are disabled in Phase 7. Use SQLite source.'
+    };
+  }
+
   if (!fs.existsSync(newPath)) {
     return { success: false, message: '❌ Файл не найден по указанному пути' };
   }
@@ -835,8 +877,9 @@ module.exports = {
     getModuleFunc = context.getModule; // Для доступа к модулю админов
     notificationRouter = createNotificationRouter(bot, logger);
     
-    // Загружаем сохранённый путь
-    excelPath = moduleData.excelPath || '';
+    // moduleData.excelPath is runtime-owned state and may be stale.
+    // In sqlite mode we ignore it unless legacy Excel runtime is explicitly enabled.
+    excelPath = allowLegacyExcelRuntime ? (moduleData.excelPath || '') : '';
     
     console.log('  📊 Модуль посещаемости инициализирован');
     console.log(`  📡 Источник посещаемости: ${attendanceSource}`);
@@ -919,7 +962,7 @@ module.exports = {
         const canAutoStartSqlite = attendanceSource === 'sqlite';
 
         if (!canAutoStartExcel && !canAutoStartSqlite) {
-          console.log('  ⚠️  Автозапуск не выполнен: для excel источника не задан корректный excelPath');
+          console.log('  ⚠️  Автозапуск не выполнен: sqlite source unavailable or excel source disabled');
           return;
         }
 
