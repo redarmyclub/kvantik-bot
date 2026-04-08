@@ -45,6 +45,7 @@ let sqliteCursorInitialized = false;
 const attendanceSource = String(config.attendance?.source || 'excel').toLowerCase();
 const sqliteDbPath = config.attendance?.sqliteDbPath || '/opt/kvantik-rfid/data/kvantik.db';
 const sqlitePollMs = Number(config.attendance?.sqlitePollMs) || 3000;
+const LOW_LUNCH_THRESHOLD = 2;
 
 // ============= ОСНОВНЫЕ ФУНКЦИИ =============
 
@@ -283,6 +284,8 @@ async function sendCheckoutNotification(session, children) {
 
     // Остаток часов (красиво: 1 час / 2 часа / 5 часов)
     const h = Math.round((child.remaining_hours || 0) * 10) / 10;
+    const lunchStatus = await getLunchStatusForCard(session.card_id);
+    const lunchBalance = lunchStatus.balance;
     const abs = Math.floor(Math.abs(h));
     let hoursWord;
     if (abs % 100 >= 11 && abs % 100 <= 14)   hoursWord = 'часов';
@@ -303,11 +306,24 @@ async function sendCheckoutNotification(session, children) {
       `📅 ${today}\n` +
       `В абонементе осталось:\n` +
       `${h} ${hoursWord}.\n` +
+      `Осталось обедов: ${lunchBalance}\n` +
       expirationLine +
       `Детский клуб "Квантик"`;
 
     const { targets, overlapTargets } = buildNotificationTargets(parent.chatId);
     await sendAttendanceMessageToTargets(message, targets, overlapTargets);
+
+    const lowLunchWarningSent = await maybeSendLowLunchWarning({
+      cardId: session.card_id,
+      childFullName,
+      parentChatId: parent.chatId,
+      lunchBalance,
+      hasLunchPlan: lunchStatus.hasLunchPlan
+    });
+
+    if (lowLunchWarningSent) {
+      console.log(`  ⚠️  Низкий баланс обедов: ${childFullName} → ${parent.chatId} (остаток=${lunchBalance})`);
+    }
 
     console.log(`  👋 Уведомление об уходе: ${childFullName} → ${parent.chatId}`);
     return true;
@@ -383,6 +399,133 @@ function runSqliteQuery(sql) {
       }
     );
   });
+}
+
+function ensureLowLunchWarningState() {
+  if (!moduleData.lowLunchWarnings || typeof moduleData.lowLunchWarnings !== 'object') {
+    moduleData.lowLunchWarnings = {};
+  }
+  return moduleData.lowLunchWarnings;
+}
+
+function updateLowLunchWarningState(cardId, updater) {
+  if (!cardId || typeof updater !== 'function') return;
+
+  const key = String(cardId);
+  const store = ensureLowLunchWarningState();
+  const prevState = store[key] || null;
+  const nextState = updater(prevState);
+
+  if (nextState === null) {
+    if (store[key]) {
+      delete store[key];
+      if (saveDataFunc) saveDataFunc();
+    }
+    return;
+  }
+
+  const prevJson = JSON.stringify(prevState || {});
+  const nextJson = JSON.stringify(nextState);
+  if (prevJson !== nextJson) {
+    store[key] = nextState;
+    if (saveDataFunc) saveDataFunc();
+  }
+}
+
+async function maybeSendLowLunchWarning({ cardId, childFullName, parentChatId, lunchBalance, hasLunchPlan }) {
+  if (!cardId || !parentChatId) return false;
+
+  const nowIso = new Date().toISOString();
+  let shouldSend = false;
+
+  updateLowLunchWarningState(cardId, (prevState) => {
+    if (!hasLunchPlan) return null;
+
+    const lowWarningSent = !!prevState?.lowWarningSent;
+    const isLow = lunchBalance < LOW_LUNCH_THRESHOLD;
+    shouldSend = isLow && !lowWarningSent;
+
+    if (!isLow) {
+      return {
+        lowWarningSent: false,
+        lastBalance: lunchBalance,
+        updatedAt: nowIso
+      };
+    }
+
+    return {
+      lowWarningSent,
+      lastBalance: lunchBalance,
+      updatedAt: nowIso
+    };
+  });
+
+  if (!shouldSend) return false;
+
+  const warningMessage =
+    `⚠️ ЗАКАНЧИВАЮТСЯ ОБЕДЫ\n\n` +
+    `👶 ${childFullName}\n` +
+    `🍽️ Осталось обедов: ${lunchBalance}\n\n` +
+    `Пожалуйста, пополните баланс обедов.\n\n` +
+    `Детский клуб "Квантик"`;
+
+  try {
+    if (!notificationRouter) {
+      await bot.sendMessage(parentChatId, warningMessage);
+    } else {
+      await notificationRouter.sendParentMessage(parentChatId, warningMessage);
+    }
+
+    updateLowLunchWarningState(cardId, (prevState) => ({
+      ...(prevState || {}),
+      lowWarningSent: true,
+      lastBalance: lunchBalance,
+      updatedAt: new Date().toISOString()
+    }));
+
+    return true;
+  } catch (error) {
+    logger.warn(`maybeSendLowLunchWarning: failed for card_id=${cardId}: ${error.message}`);
+    return false;
+  }
+}
+
+async function getLunchStatusForCard(cardId) {
+  if (!cardId) {
+    return { balance: 0, hasLunchPlan: false };
+  }
+
+  const safeId = String(cardId).replace(/'/g, "''");
+  const query = [
+    'SELECT',
+    '  COALESCE(lb.balance, 0),',
+    '  CASE',
+    '    WHEN lb.child_id IS NOT NULL THEN 1',
+    '    WHEN EXISTS (SELECT 1 FROM lunch_ledger ll WHERE ll.child_id = c.id) THEN 1',
+    '    ELSE 0',
+    '  END',
+    'FROM children c',
+    'LEFT JOIN lunch_balances lb ON lb.child_id = c.id',
+    `WHERE c.card_id = '${safeId}'`,
+    'LIMIT 1;'
+  ].join(' ');
+
+  try {
+    const rawRow = await runSqliteQuery(query);
+    if (!rawRow) return { balance: 0, hasLunchPlan: false };
+
+    const [rawBalance, rawHasLunchPlan] = String(rawRow).split('\t');
+    const balance = Number(rawBalance);
+    const hasLunchPlan = Number(rawHasLunchPlan) === 1;
+
+    return {
+      balance: Number.isFinite(balance) ? Math.trunc(balance) : 0,
+      hasLunchPlan
+    };
+  } catch (error) {
+    logger.warn(`getLunchStatusForCard: failed to read lunch status for card_id=${cardId}: ${error.message}`);
+    return { balance: 0, hasLunchPlan: false };
+  }
 }
 
 async function ensureSqliteSourceReady() {
