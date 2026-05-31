@@ -11,7 +11,9 @@
 const ExcelJS = require('exceljs');
 const fs = require('fs');
 const path = require('path');
+const config = require('../config/config');
 const logger = require('../utils/logger');
+const { normalizeRussianPhone } = require('../utils/phoneNormalize');
 const createNotificationRouter = require('../utils/notificationRouter');
 
 module.exports = {
@@ -71,22 +73,16 @@ module.exports = {
   },
 
   getAttendanceSource() {
-    try {
-      const conf = require('../config/config');
-      return String(conf.attendance?.source || 'excel').toLowerCase();
-    } catch {
-      return 'excel';
+    const source = String(config.attendance?.source || 'sqlite').toLowerCase();
+    if (source === 'excel' && !config.runtime?.allowLegacyExcelRuntime) {
+      return 'sqlite';
     }
+    return source;
   },
 
   // Получение пути к SQLite базе данных
   getSqliteDbPath() {
-    try {
-      const conf = require('../config/config');
-      return conf.attendance?.sqliteDbPath || '/opt/kvantik-rfid/data/kvantik.db';
-    } catch {
-      return '/opt/kvantik-rfid/data/kvantik.db';
-    }
+    return config.attendance?.sqliteDbPath || '/opt/kvantik-rfid/data/kvantik.db';
   },
   
   // Запуск периодической проверки
@@ -491,10 +487,12 @@ module.exports = {
   // Поиск родителя по телефону
   findParentByPhone(phone) {
     const normalizedPhone = this.normalizePhone(phone);
-    
+    if (!normalizedPhone) return null;
+
     for (const [chatId, user] of Object.entries(this.users)) {
       const userPhone = this.normalizePhone(user.phone);
-      
+      if (!userPhone) continue;
+
       if (userPhone === normalizedPhone) {
         return {
           chatId,
@@ -503,14 +501,13 @@ module.exports = {
         };
       }
     }
-    
+
     return null;
   },
-  
+
   // Нормализация телефона
   normalizePhone(phone) {
-    if (!phone) return '';
-    return String(phone).replace(/\D/g, '');
+    return normalizeRussianPhone(phone);
   },
   
   // Создание прогресс-бара

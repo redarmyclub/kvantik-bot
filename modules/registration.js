@@ -5,6 +5,7 @@
 
 const logger = require('../utils/logger');
 const createNotificationRouter = require('../utils/notificationRouter');
+const { normalizeRussianPhone } = require('../utils/phoneNormalize');
 
 const registrationModule = {
   name: 'registration',
@@ -118,8 +119,8 @@ const registrationModule = {
           return { handled: true };
           
         case 'waiting_phone':
-          const phone = text.replace(/[^\d+]/g, '');
-          if (phone.length < 11) {
+          const normalizedPhone = normalizeRussianPhone(text);
+          if (!normalizedPhone) {
             this.bot.sendMessage(chatId, '❌ Неверный формат телефона. Попробуйте ещё раз:');
             return { handled: true };
           }
@@ -127,7 +128,7 @@ const registrationModule = {
           // Сохраняем данные родителя
           userData.parentName = state.tempData.parentName;
           userData.parentFullName = state.tempData.parentFullName;
-          userData.phone = phone;
+          userData.phone = normalizedPhone;
           userData.isRegistered = true;
           userData.registeredAt = new Date().toISOString();
           

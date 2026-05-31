@@ -11,6 +11,7 @@ const { execFile } = require('child_process');
 const config = require('../config/config');
 const createNotificationRouter = require('../utils/notificationRouter');
 const logger = require('../utils/logger');
+const { normalizeRussianPhone } = require('../utils/phoneNormalize');
 
 // Глобальные переменные модуля
 let bot = null;
@@ -43,6 +44,7 @@ let sqliteLastProcessedId = 0;
 let sqliteCursorInitialized = false;
 
 const attendanceSource = String(config.attendance?.source || 'excel').toLowerCase();
+const allowLegacyExcelRuntime = !!config.runtime?.allowLegacyExcelRuntime;
 const sqliteDbPath = config.attendance?.sqliteDbPath || '/opt/kvantik-rfid/data/kvantik.db';
 const sqlitePollMs = Number(config.attendance?.sqlitePollMs) || 3000;
 const LOW_LUNCH_THRESHOLD = 2;
@@ -50,18 +52,19 @@ const LOW_LUNCH_THRESHOLD = 2;
 // ============= ОСНОВНЫЕ ФУНКЦИИ =============
 
 function normalizePhone(phone) {
-  if (!phone) return '';
-  return String(phone).replace(/\D/g, '');
+  return normalizeRussianPhone(phone);
 }
 
 function findParentByPhone(phone) {
   if (!phone) return null;
-  
+
   const normalizedPhone = normalizePhone(phone);
-  
+  if (!normalizedPhone) return null;
+
   for (const [chatId, user] of Object.entries(users)) {
     const userPhone = normalizePhone(user.phone);
-    
+    if (!userPhone) continue;
+
     if (userPhone === normalizedPhone) {
       return {
         chatId,
@@ -70,7 +73,7 @@ function findParentByPhone(phone) {
       };
     }
   }
-  
+
   return null;
 }
 
@@ -872,6 +875,13 @@ function stopMonitoring() {
 
 async function startMonitoring() {
   if (attendanceSource === 'excel') {
+    if (!allowLegacyExcelRuntime) {
+      console.log('  ⛔ Excel runtime path disabled (ALLOW_LEGACY_EXCEL_RUNTIME=false)');
+      return {
+        success: false,
+        message: '⛔ Excel runtime path disabled. SQLite is the operational source of truth.'
+      };
+    }
     console.log('  📡 Attendance source selected: excel');
     return startExcelMonitoring();
   }
@@ -887,6 +897,13 @@ async function startMonitoring() {
 }
 
 function setExcelPath(newPath) {
+  if (!allowLegacyExcelRuntime) {
+    return {
+      success: false,
+      message: '⛔ Excel path updates are disabled. Set ALLOW_LEGACY_EXCEL_RUNTIME=true to re-enable.'
+    };
+  }
+
   if (!fs.existsSync(newPath)) {
     return { success: false, message: '❌ Файл не найден по указанному пути' };
   }

@@ -13,6 +13,7 @@ const ExcelJS = require('exceljs');
 const { exec } = require('child_process');
 const util = require('util');
 const fs = require('fs');
+const config = require('../config/config');
 
 const execPromise = util.promisify(exec);
 
@@ -105,6 +106,13 @@ module.exports = {
         return this.bot.sendMessage(msg.chat.id, '❌ Эта команда доступна только главному администратору');
       }
 
+      if (!config.runtime?.allowLegacyExcelRuntime) {
+        return this.bot.sendMessage(
+          msg.chat.id,
+          '⛔ Редактирование через workbook отключено в Phase 7. Используйте SQLite/API инструменты администратора.'
+        );
+      }
+
       // Получаем путь к Excel из модуля attendance
       const attendanceModule = this.getModule ? this.getModule('attendance') : null;
       const excelPath = attendanceModule?.data?.excelPath || this.data.excelPath;
@@ -131,6 +139,13 @@ module.exports = {
     '/set_excel_path': async function (msg) {
       if (msg.chat.id != process.env.MAIN_ADMIN_ID) {
         return this.bot.sendMessage(msg.chat.id, '❌ Эта команда доступна только главному администратору');
+      }
+
+      if (!config.runtime?.allowLegacyExcelRuntime) {
+        return this.bot.sendMessage(
+          msg.chat.id,
+          '⛔ Команда отключена: workbook archive-only, runtime работает через SQLite.'
+        );
       }
 
       const newPath = msg.text.replace('/set_excel_path', '').trim();

@@ -1,6 +1,6 @@
 /**
  * Модуль системы напоминаний
- * Дни рождения, пробные занятия, оплата, неактивность
+ * Дни рождения, пробные занятия, оплата
  */
 
 const cron = require('node-cron');
@@ -24,7 +24,7 @@ const remindersModule = {
     // Запускаем cron задачи
     this.startCronJobs();
     
-    console.log('  ⏰ Напоминания: инициализировано (4 задачи)');
+    console.log('  ⏰ Напоминания: инициализировано (3 задачи)');
   },
   
   commands: {
@@ -211,13 +211,6 @@ const remindersModule = {
       })
     );
     
-    // 4. Неактивные клиенты - каждый понедельник в 12:00
-    this.cronJobs.push(
-      cron.schedule('0 12 * * 1', () => {
-        this.checkInactiveClients();
-      })
-    );
-    
     logger.info('REMINDERS', 'Cron jobs started');
   },
   
@@ -333,34 +326,6 @@ const remindersModule = {
               `📞 Вопросы: +7 (963) 384-09-77`
             ).catch(err => logger.error('REMINDERS', 'Error sending payment due reminder', err.message));
           }
-        }
-      }
-    });
-  },
-  
-  // Проверка неактивных клиентов
-  checkInactiveClients() {
-    logger.info('REMINDERS', 'Checking inactive clients');
-    
-    const twoWeeksAgo = new Date();
-    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
-    
-    const users = this.users || {};
-    
-    Object.keys(users).forEach(chatId => {
-      const user = users[chatId];
-      
-      if (user.lastVisitDate) {
-        const lastVisit = new Date(user.lastVisitDate);
-        
-        if (lastVisit < twoWeeksAgo) {
-          this.bot.sendMessage(
-            chatId,
-            `👋 МЫ СКУЧАЕМ!\n\n` +
-            `${user.parentName}, мы давно вас не видели в клубе "Квантик"!\n\n` +
-            `Приходите, у нас много интересного! 🎨📚🎮\n` +
-            `📞 Звоните: +7 (963) 384-09-77`
-          ).catch(err => logger.error('REMINDERS', 'Error sending inactive reminder', err.message));
         }
       }
     });
