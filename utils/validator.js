@@ -1,9 +1,10 @@
 const Joi = require('joi');
+const { normalizeRussianPhone } = require('./phoneNormalize');
 
 const schemas = {
   // Валидация телефона
   phone: Joi.string()
-    .pattern(/^(\+7|8)?[\s-]?\(?[0-9]{3}\)?[\s-]?[0-9]{3}[\s-]?[0-9]{2}[\s-]?[0-9]{2}$/)
+    .pattern(/^(\+7|[78])[\s-]?\(?[0-9]{3}\)?[\s-]?[0-9]{3}[\s-]?[0-9]{2}[\s-]?[0-9]{2}$/)
     .message('Неверный формат телефона. Используйте: +7 (999) 123-45-67 или 89991234567'),
   
   // Валидация даты рождения
@@ -81,19 +82,10 @@ const schemas = {
 const validator = {
   // Валидация телефона
   validatePhone: (phone) => {
-    const { error, value } = schemas.phone.validate(phone);
-    if (error) {
-      return { valid: false, message: error.message };
+    const formatted = normalizeRussianPhone(phone);
+    if (!formatted) {
+      return { valid: false, message: '\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u0444\u043e\u0440\u043c\u0430\u0442 \u0442\u0435\u043b\u0435\u0444\u043e\u043d\u0430. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435: +7 (999) 123-45-67 \u0438\u043b\u0438 89991234567' };
     }
-    
-    // Нормализация телефона
-    const normalized = value.replace(/[\s-()]/g, '');
-    const formatted = normalized.startsWith('8') 
-      ? '+7' + normalized.slice(1)
-      : normalized.startsWith('+7')
-        ? normalized
-        : '+7' + normalized;
-    
     return { valid: true, value: formatted };
   },
   

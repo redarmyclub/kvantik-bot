@@ -22,6 +22,12 @@ function getBooleanEnv(name, defaultValue) {
 const resolvedTelegramToken = getEnvBySuffix('TELEGRAM_BOT_TOKEN', '');
 const resolvedMainAdminId = getEnvBySuffix('MAIN_ADMIN_ID', '');
 const resolvedAdditionalAdmins = getEnvBySuffix('ADDITIONAL_ADMINS', '');
+const allowLegacyExcelRuntime = getBooleanEnv('ALLOW_LEGACY_EXCEL_RUNTIME', false);
+const requestedAttendanceSource = String(process.env.ATTENDANCE_SOURCE || 'sqlite').toLowerCase();
+const resolvedAttendanceSource =
+  requestedAttendanceSource === 'excel' && !allowLegacyExcelRuntime
+    ? 'sqlite'
+    : requestedAttendanceSource;
 
 // Совместимость со старыми модулями, которые читают process.env напрямую
 if (resolvedTelegramToken && !process.env.TELEGRAM_BOT_TOKEN) {
@@ -106,9 +112,13 @@ const config = {
   // Посещаемость
   attendance: {
     autoStartWatcher: getBooleanEnv('ATTENDANCE_AUTO_START', appEnv === 'production'),
-    source: (process.env.ATTENDANCE_SOURCE || 'excel').toLowerCase(),
+    source: resolvedAttendanceSource,
     sqliteDbPath: process.env.ATTENDANCE_SQLITE_DB_PATH || '/opt/kvantik-rfid/data/kvantik.db',
     sqlitePollMs: parseInt(process.env.ATTENDANCE_SQLITE_POLL_MS, 10) || 3000
+  },
+
+  runtime: {
+    allowLegacyExcelRuntime
   },
   
   // Пути
