@@ -12,6 +12,7 @@ const config = require('../config/config');
 const createNotificationRouter = require('../utils/notificationRouter');
 const logger = require('../utils/logger');
 const { normalizeRussianPhone } = require('../utils/phoneNormalize');
+const kvantigramClient = require('../utils/kvantigramClient');
 
 // Глобальные переменные модуля
 let bot = null;
@@ -238,13 +239,7 @@ async function sendCheckinNotification(entry, children) {
       console.log(`  ⚠️  Нет телефона для карты: ${entry.card_id}`);
       return true;
     }
-    
-    const parent = findParentByPhone(child.parent_phone);
-    if (!parent) {
-      console.log(`  ⚠️  Родитель не найден для телефона: ${child.parent_phone}`);
-      return true;
-    }
-    
+
     const childFullName = `${child.first_name} ${child.last_name}`.trim();
     const message = `✅ РЕБЁНОК ПРИШЁЛ В КЛУБ\n\n` +
       `👶 ${childFullName}\n` +
@@ -252,12 +247,36 @@ async function sendCheckinNotification(entry, children) {
       `📅 ${new Date().toLocaleDateString('ru-RU')}\n\n` +
       `Детский клуб "Квантик"`;
 
-    const { targets, overlapTargets } = buildNotificationTargets(parent.chatId);
-    await sendAttendanceMessageToTargets(message, targets, overlapTargets);
+    // Telegram notification (requires registered parent in bot users)
+    const parent = findParentByPhone(child.parent_phone);
+    if (parent) {
+      const { targets, overlapTargets } = buildNotificationTargets(parent.chatId);
+      await sendAttendanceMessageToTargets(message, targets, overlapTargets);
+      console.log(`  ✅ Уведомление о приходе: ${childFullName} → ${parent.chatId}`);
+    } else {
+      console.log(`  ⚠️  Родитель не найден в Telegram для телефона: ${child.parent_phone}`);
+    }
 
-    console.log(`  ✅ Уведомление о приходе: ${childFullName} → ${parent.chatId}`);
+    // Kvantigram parallel notification (non-fatal, fire-and-forget)
+    // Runs regardless of whether a Telegram parent was found
+    try {
+      const canonicalPhone = normalizeRussianPhone(child.parent_phone);
+      if (canonicalPhone && kvantigramClient.isEnabled()) {
+        const externalId = `rfid:${entry.event_id}:${canonicalPhone}:check_in`;
+        kvantigramClient.sendByPhone({
+          phone: child.parent_phone,
+          text: message,
+          type: 'attendance.check_in',
+          externalId,
+          metadata: { source: 'rfid', attendanceEventId: entry.event_id, childName: childFullName, direction: 'check_in' },
+        }).catch(err => logger.warn('attendance', `Kvantigram check_in error: ${err.message}`));
+      }
+    } catch (kgErr) {
+      logger.warn('attendance', `Kvantigram check_in setup error: ${kgErr.message}`);
+    }
+
     return true;
-    
+
   } catch (error) {
     console.error('  ❌ Ошибка отправки уведомления о приходе:', error.message);
     return false;
@@ -271,13 +290,7 @@ async function sendCheckoutNotification(session, children) {
       console.log(`  ⚠️  Нет телефона для карты: ${session.card_id}`);
       return true;
     }
-    
-    const parent = findParentByPhone(child.parent_phone);
-    if (!parent) {
-      console.log(`  ⚠️  Родитель не найден для телефона: ${child.parent_phone}`);
-      return true;
-    }
-    
+
     const childFullName = session.child_name || `${child.first_name} ${child.last_name}`.trim();
 
     const now          = new Date();
@@ -311,12 +324,36 @@ async function sendCheckoutNotification(session, children) {
       expirationLine +
       `Детский клуб "Квантик"`;
 
-    const { targets, overlapTargets } = buildNotificationTargets(parent.chatId);
-    await sendAttendanceMessageToTargets(message, targets, overlapTargets);
+    // Telegram notification (requires registered parent in bot users)
+    const parent = findParentByPhone(child.parent_phone);
+    if (parent) {
+      const { targets, overlapTargets } = buildNotificationTargets(parent.chatId);
+      await sendAttendanceMessageToTargets(message, targets, overlapTargets);
+      console.log(`  👋 Уведомление об уходе: ${childFullName} → ${parent.chatId}`);
+    } else {
+      console.log(`  ⚠️  Родитель не найден в Telegram для телефона: ${child.parent_phone}`);
+    }
 
-    console.log(`  👋 Уведомление об уходе: ${childFullName} → ${parent.chatId}`);
+    // Kvantigram parallel notification (non-fatal, fire-and-forget)
+    // Runs regardless of whether a Telegram parent was found
+    try {
+      const canonicalPhone = normalizeRussianPhone(child.parent_phone);
+      if (canonicalPhone && kvantigramClient.isEnabled()) {
+        const externalId = `rfid:${session.event_id}:${canonicalPhone}:check_out`;
+        kvantigramClient.sendByPhone({
+          phone: child.parent_phone,
+          text: message,
+          type: 'attendance.check_out',
+          externalId,
+          metadata: { source: 'rfid', attendanceEventId: session.event_id, childName: childFullName, direction: 'check_out' },
+        }).catch(err => logger.warn('attendance', `Kvantigram check_out error: ${err.message}`));
+      }
+    } catch (kgErr) {
+      logger.warn('attendance', `Kvantigram check_out setup error: ${kgErr.message}`);
+    }
+
     return true;
-    
+
   } catch (error) {
     console.error('  ❌ Ошибка отправки уведомления об уходе:', error.message);
     return false;
@@ -354,7 +391,8 @@ async function handleAttendanceEvent(event, children) {
       {
         card_id: cardId,
         child_name: event.child_name || '',
-        time_in: formatEventTimeToHHMM(event.event_time || event.time_in)
+        time_in: formatEventTimeToHHMM(event.event_time || event.time_in),
+        event_id: event.id
       },
       children
     );
@@ -364,7 +402,8 @@ async function handleAttendanceEvent(event, children) {
     return sendCheckoutNotification(
       {
         card_id: cardId,
-        child_name: event.child_name || ''
+        child_name: event.child_name || '',
+        event_id: event.id
       },
       children
     );
