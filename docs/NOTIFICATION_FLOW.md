@@ -1,6 +1,6 @@
 # Kvantik Bot — Notification Flow
 
-Documents how the RFID attendance system triggers parent notifications via Telegram and Kvantigram (kvantik-messenger).
+Documents how the RFID attendance system triggers parent notifications via Telegram and Kvantigram (kvantik-messenger). Since P0 #10.2 the Kvantigram backend also fans out to all active admins — the bot sends one request and the backend handles multi-recipient delivery.
 
 ---
 
@@ -38,10 +38,11 @@ The SQLite cursor (`attendance_cursor`) advances only after successful processin
 2. If no child or no `parent_phone` → return early (no notification).
 3. Build `message` text (includes child full name and event time).
 4. **Telegram path**: look up parent by `parent_phone` in the bot's in-memory user registry (`findParentByPhone`). If found, send via `sendAttendanceMessageToTargets`.
-5. **Kvantigram path** (independent, fire-and-forget):
+5. **Kvantigram path** (independent, fire-and-forget, **backend-side fanout**):
    - Normalize `parent_phone` → `+7XXXXXXXXXX` via `normalizeRussianPhone`.
    - Check `kvantigramClient.isEnabled()`.
    - Call `kvantigramClient.sendByPhone(...)` with `.catch()` wrapper — errors are logged as warnings and never bubble up.
+   - **Backend delivers to**: the matched parent/contact account AND all active Kvantigram admins (`base_role='admin'`, `account_status='active'`, `is_blocked=0`). If the parent is also an admin they receive exactly one copy (dedup in backend). The bot sends a single HTTP request regardless of the number of admins.
 
 ## Check-out flow (`sendCheckoutNotification`)
 
@@ -82,17 +83,19 @@ Authorization: Bearer {KVANTIGRAM_BOT_INTEGRATION_TOKEN}
 
 Timeout: **5 seconds**. Uses `validateStatus: () => true` so HTTP errors do not throw.
 
-Return values:
+Return values (bot client reads top-level backward-compat fields only):
 
 | Condition | Return |
 |---|---|
 | `isEnabled()` false | `{sent:false, reason:'disabled'}` |
-| `201` delivered | `{sent:true, delivered:true, messageId, chatId, idempotent:false}` |
-| `200` idempotent | `{sent:true, delivered:true, messageId, idempotent:true}` |
-| `200` no recipient | `{sent:true, delivered:false, reason:'no_kvantigram_account'}` |
+| `201` new delivery | `{sent:true, delivered:true, messageId, chatId, idempotent:false}` |
+| `200` all-idempotent | `{sent:true, delivered:true, messageId, idempotent:true}` |
+| `200` no recipients | `{sent:true, delivered:false, reason:'no_recipients'}` |
 | HTTP 4xx/5xx | `{sent:false, error:'http {status}'}` |
 | Timeout | `{sent:false, error:'timeout'}` |
 | Network error | `{sent:false, error: message}` |
+
+The backend response also contains `parent{}` and `admins{}` sub-objects (see `kvantik-messenger/docs/INTEGRATIONS.md`) but the bot client does not parse them — it only reads top-level `delivered`, `messageId`, `chatId`, `idempotent`.
 
 The integration token is **never** written to logs.
 
@@ -108,7 +111,7 @@ Examples:
 - `rfid:100:+79620217494:check_in`
 - `rfid:101:+79620217494:check_out`
 
-The messenger backend deduplicates on `externalId`. Re-sending the same RFID event never creates a duplicate message.
+The messenger backend deduplicates **per recipient**: the parent uses the base key; each admin uses `{externalId}:admin:{adminAccountId}`. Re-sending the same RFID event never creates duplicate messages for any recipient. Partial idempotency is also supported: if a new admin account is added between two calls, only that new admin receives the message on the second call.
 
 ---
 
